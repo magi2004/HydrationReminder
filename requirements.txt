@@ -1,0 +1,7 @@
+customtkinter>=5.2.2
+Pillow>=10.2.0
+plyer>=2.1.0
+tkcalendar>=1.6.1
+pystray>=0.19.5
+pyinstaller>=6.3.0
+# tkinter is part of the Python standard library, but on some Linux systems you may need to install it separately (e.g., python3-tk) 
