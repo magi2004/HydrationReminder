@@ -32,6 +32,17 @@ def set_app_user_model_id(app_id: str) -> None:
     except Exception:
         pass
 
+def get_app_data_dir() -> str:
+    appdata = os.getenv("APPDATA")
+    if not appdata:
+        appdata = os.path.expanduser("~")
+    target = os.path.join(appdata, "HydrationReminder")
+    try:
+        os.makedirs(target, exist_ok=True)
+    except Exception:
+        pass
+    return target
+
 class ReminderApp:
     def __init__(self):
         # Ensure Windows toast notifications are associated with our app
@@ -72,8 +83,9 @@ class ReminderApp:
         self.setup_tray()
         self.register_startup(enable=True)
         
-        # Start reminders automatically
-        self.start_reminders()
+        # Start reminders automatically (only via unified countdown popup)
+        # Disable background threads to avoid duplicate notifications
+        # self.start_reminders()
         
         # Handle window close
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -140,7 +152,8 @@ class ReminderApp:
     
     def load_settings(self):
         try:
-            with open("settings.json", "r") as f:
+            settings_path = os.path.join(get_app_data_dir(), "settings.json")
+            with open(settings_path, "r") as f:
                 self.settings = json.load(f)
         except FileNotFoundError:
             self.settings = {
@@ -149,8 +162,12 @@ class ReminderApp:
             }
     
     def save_settings(self):
-        with open("settings.json", "w") as f:
-            json.dump(self.settings, f)
+        try:
+            settings_path = os.path.join(get_app_data_dir(), "settings.json")
+            with open(settings_path, "w") as f:
+                json.dump(self.settings, f)
+        except Exception:
+            pass
     
     def setup_ui(self):
         # Title
@@ -237,21 +254,8 @@ class ReminderApp:
         self.time_picker_open = False
     
     def start_reminders(self):
-        # Start hydration reminder
-        self.hydration_thread = threading.Thread(
-            target=self.reminder_loop,
-            args=(20, "hydration", "Time to Hydrate! 💧", None)
-        )
-        self.hydration_thread.daemon = True
-        self.hydration_thread.start()
-        
-        # Start eye care reminder
-        self.eye_thread = threading.Thread(
-            target=self.reminder_loop,
-            args=(20, "eye", "Time to rest your eyes! 👀", None)
-        )
-        self.eye_thread.daemon = True
-        self.eye_thread.start()
+        # Deprecated: unified reminders handled by countdown timer
+        return
     
     def show_date_picker(self):
         if self.date_picker_open:
@@ -391,7 +395,8 @@ class ReminderApp:
             "task": task,
             "date": self.selected_date,
             "time": self.selected_time,
-            "completed": False
+            "completed": False,
+            "daily": False
         }
         
         self.todos.append(todo)
@@ -434,6 +439,18 @@ class ReminderApp:
             )
             task_label.pack(side="left", padx=5, pady=5)
             
+            # Daily toggle
+            daily_var = tk.BooleanVar(value=todo.get("daily", False))
+            def make_toggle_handler(index, var):
+                return lambda: self.toggle_daily(index, var.get())
+            daily_switch = ctk.CTkSwitch(
+                todo_frame,
+                text="Remind daily",
+                command=make_toggle_handler(i, daily_var),
+                variable=daily_var
+            )
+            daily_switch.pack(side="right", padx=5, pady=5)
+
             # Complete button
             if not todo["completed"]:
                 complete_button = ctk.CTkButton(
@@ -458,6 +475,15 @@ class ReminderApp:
         self.todos[index]["completed"] = True
         self.save_todos()
         self.refresh_todo_list()
+
+    def toggle_daily(self, index, value):
+        self.todos[index]["daily"] = bool(value)
+        self.save_todos()
+        # Reschedule if necessary
+        try:
+            self.schedule_todo_notification(self.todos[index])
+        except Exception:
+            pass
     
     def delete_todo(self, index):
         del self.todos[index]
@@ -465,12 +491,17 @@ class ReminderApp:
         self.refresh_todo_list()
     
     def save_todos(self):
-        with open("todos.json", "w") as f:
-            json.dump(self.todos, f)
+        try:
+            todos_path = os.path.join(get_app_data_dir(), "todos.json")
+            with open(todos_path, "w") as f:
+                json.dump(self.todos, f)
+        except Exception:
+            pass
     
     def load_todos(self):
         try:
-            with open("todos.json", "r") as f:
+            todos_path = os.path.join(get_app_data_dir(), "todos.json")
+            with open(todos_path, "r") as f:
                 self.todos = json.load(f)
         except FileNotFoundError:
             self.todos = []
@@ -481,34 +512,71 @@ class ReminderApp:
                 reminder_time = datetime.strptime(f"{todo['date']} {todo['time']}", "%Y-%m-%d %H:%M")
                 now = datetime.now()
                 
-                if reminder_time > now:
-                    delay = (reminder_time - now).total_seconds()
-                    threading.Timer(delay, self.show_todo_notification, args=[todo]).start()
+                if reminder_time <= now:
+                    # If daily is enabled, schedule for next day at the same time
+                    if todo.get("daily"):
+                        reminder_time = reminder_time + timedelta(days=1)
+                    else:
+                        return
+
+                delay = (reminder_time - now).total_seconds()
+                def notify_and_reschedule():
+                    self.show_todo_notification(todo)
+                    if todo.get("daily"):
+                        # reschedule for next day
+                        try:
+                            todo_date = datetime.strptime(todo['date'], "%Y-%m-%d").date()
+                            next_day = (datetime.combine(todo_date, datetime.min.time()) + timedelta(days=1)).date()
+                            todo['date'] = next_day.strftime("%Y-%m-%d")
+                            self.save_todos()
+                        except Exception:
+                            pass
+                        self.schedule_todo_notification(todo)
+                threading.Timer(delay, notify_and_reschedule).start()
             except ValueError:
                 pass
     
     def show_todo_notification(self, todo):
-        self.safe_notify(
-            title="Todo Reminder",
-            message=f"Task due: {todo['task']}",
-            timeout=10
-        )
+        # Use unified, top-most popup similar to health reminder
+        self.show_unified_todo_popup(todo)
+
+    def show_unified_todo_popup(self, todo):
+        try:
+            popup = tk.Toplevel(self.window)
+            popup.title("Todo Reminder")
+            popup.attributes("-topmost", True)
+            popup.geometry("460x240")
+            try:
+                popup.iconbitmap(get_resource_path("icon.ico"))
+            except Exception:
+                pass
+            popup.grab_set()
+            popup.protocol("WM_DELETE_WINDOW", lambda: None)
+            frame = ctk.CTkFrame(popup)
+            frame.pack(fill="both", expand=True, padx=15, pady=15)
+            due_str = ""
+            try:
+                if todo.get("date") and todo.get("time"):
+                    due_str = f"\nDue: {todo['date']} {todo['time']}"
+            except Exception:
+                pass
+            label = ctk.CTkLabel(
+                frame,
+                text=f"Task due: {todo['task']}" + due_str,
+                font=("Helvetica", 18, "bold"),
+                justify="center"
+            )
+            label.pack(pady=20)
+            btn = ctk.CTkButton(frame, text="OK", command=lambda: self._close_unified_popup(popup), width=120)
+            btn.pack(pady=10)
+            popup.after(60_000, lambda: self._close_unified_popup(popup))
+            popup.after(200, lambda: popup.attributes("-topmost", True))
+        except Exception:
+            pass
     
     def reminder_loop(self, interval, reminder_type, message, last_label):
-        while getattr(self, f"{reminder_type}_active"):
-            # Calculate the next reminder time
-            next_reminder = time.time() + (interval * 60)
-            
-            # Sleep in smaller chunks to allow for quicker response to changes
-            while time.time() < next_reminder and getattr(self, f"{reminder_type}_active"):
-                time.sleep(1)  # Sleep for 1 second at a time
-                
-            if getattr(self, f"{reminder_type}_active"):  # Check if still active after sleep
-                self.safe_notify(
-                    title=message,
-                    message="Take a break and stay healthy!",
-                    timeout=10
-                )
+        # Deprecated: unified reminders handled by countdown timer
+        return
     
     def update_countdown_timer(self):
         mins, secs = divmod(self.countdown_seconds, 60)
@@ -518,21 +586,50 @@ class ReminderApp:
             self.window.after(1000, self.update_countdown_timer)
         else:
             # Trigger both reminders
-            self.show_reminder_popup("Time to Hydrate! 💧\nTime to rest your eyes! 👀")
-            try:
-                self.safe_notify(
-                    title="Health Reminder",
-                    message="Time to Hydrate! 💧\nTime to rest your eyes! 👀",
-                    timeout=10
-                )
-            except Exception:
-                pass
+            self.show_unified_reminder_popup()
             self.countdown_seconds = 20 * 60
             self.window.after(1000, self.update_countdown_timer)
 
     def show_reminder_popup(self, message):
+        # Deprecated in favor of show_unified_reminder_popup
+        self.show_unified_reminder_popup()
+
+    def show_unified_reminder_popup(self):
         try:
-            messagebox.showinfo("Health Reminder", message)
+            popup = tk.Toplevel(self.window)
+            popup.title("Health Reminder")
+            popup.attributes("-topmost", True)
+            popup.geometry("420x220")
+            try:
+                popup.iconbitmap(get_resource_path("icon.ico"))
+            except Exception:
+                pass
+            popup.grab_set()
+            # Prevent closing to ensure attention until timeout or OK
+            popup.protocol("WM_DELETE_WINDOW", lambda: None)
+            frame = ctk.CTkFrame(popup)
+            frame.pack(fill="both", expand=True, padx=15, pady=15)
+            label = ctk.CTkLabel(
+                frame,
+                text="Time to Hydrate! 💧\nTime to rest your eyes! 👀",
+                font=("Helvetica", 18, "bold"),
+                justify="center"
+            )
+            label.pack(pady=20)
+            btn = ctk.CTkButton(frame, text="OK", command=lambda: self._close_unified_popup(popup), width=120)
+            btn.pack(pady=10)
+            # Auto-close after 60 seconds if not acknowledged
+            popup.after(60_000, lambda: self._close_unified_popup(popup))
+            # Force on top again shortly after creation
+            popup.after(200, lambda: popup.attributes("-topmost", True))
+        except Exception:
+            pass
+
+    def _close_unified_popup(self, popup: tk.Toplevel):
+        try:
+            if popup.winfo_exists():
+                popup.grab_release()
+                popup.destroy()
         except Exception:
             pass
     
