@@ -12,13 +12,44 @@ from tkinter import ttk
 import pystray
 from PIL import Image, ImageDraw
 import tkinter.messagebox as messagebox
+import sys
+import ctypes
+try:
+    import winreg as _winreg
+except Exception:
+    _winreg = None
+
+def get_resource_path(relative_path: str) -> str:
+    try:
+        base_path = sys._MEIPASS  # type: ignore[attr-defined]
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def set_app_user_model_id(app_id: str) -> None:
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 class ReminderApp:
     def __init__(self):
+        # Ensure Windows toast notifications are associated with our app
+        set_app_user_model_id("HydrationReminder.HealthTaskReminder")
+
         self.window = ctk.CTk()
         self.window.title("Health & Task Reminder")
         self.window.geometry("600x700")
         self.window.resizable(False, False)
+        try:
+            icon_path = get_resource_path("icon.ico")
+            if os.path.exists(icon_path):
+                try:
+                    self.window.iconbitmap(icon_path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         # Set theme
         ctk.set_appearance_mode("dark")
@@ -39,6 +70,7 @@ class ReminderApp:
         
         self.setup_ui()
         self.setup_tray()
+        self.register_startup(enable=True)
         
         # Start reminders automatically
         self.start_reminders()
@@ -57,10 +89,17 @@ class ReminderApp:
         self.update_countdown_timer()
     
     def setup_tray(self):
-        # Create a simple icon
-        icon_image = Image.new('RGB', (64, 64), color='blue')
-        dc = ImageDraw.Draw(icon_image)
-        dc.rectangle([16, 16, 48, 48], fill='white')
+        # Load icon from file or fallback
+        try:
+            icon_path = get_resource_path("icon.ico")
+            if os.path.exists(icon_path):
+                icon_image = Image.open(icon_path)
+            else:
+                raise FileNotFoundError
+        except Exception:
+            icon_image = Image.new('RGB', (64, 64), color='blue')
+            dc = ImageDraw.Draw(icon_image)
+            dc.rectangle([16, 16, 48, 48], fill='white')
         
         # Create menu items
         menu = (
@@ -93,7 +132,7 @@ class ReminderApp:
     def on_closing(self):
         # Hide the window instead of closing
         self.window.withdraw()
-        notification.notify(
+        self.safe_notify(
             title="Health & Task Reminder",
             message="App is running in the background. Right-click the tray icon to show or exit.",
             timeout=5
@@ -232,6 +271,8 @@ class ReminderApp:
             self.date_label.configure(text=f"Date: {self.selected_date}")
             self.date_picker_open = False
             date_window.destroy()
+            # Open time picker immediately after selecting date
+            self.show_time_picker()
         select_button = ctk.CTkButton(
             date_window,
             text="Select",
@@ -246,15 +287,26 @@ class ReminderApp:
         if self.time_picker_open:
             return
         self.time_picker_open = True
+        # Require a selected date to validate against current time
+        if not self.selected_date:
+            try:
+                messagebox.showwarning("Missing Date", "Please select a date first.")
+            except Exception:
+                pass
+            self.time_picker_open = False
+            return
         # Create a new top-level window
         time_window = tk.Toplevel(self.window)
         time_window.title("Select Time")
         time_window.geometry("400x250")  # Increased width and height
         time_window.protocol("WM_DELETE_WINDOW", lambda: self._on_close_time_picker(time_window))
         # Create time selection widgets
-        hour_var = tk.StringVar(value="12")
-        minute_var = tk.StringVar(value="00")
-        ampm_var = tk.StringVar(value="AM")
+        now = datetime.now()
+        hour_12 = now.hour % 12 or 12
+        ampm_default = "AM" if now.hour < 12 else "PM"
+        hour_var = tk.StringVar(value=f"{hour_12:02d}")
+        minute_var = tk.StringVar(value=f"{now.minute:02d}")
+        ampm_var = tk.StringVar(value=ampm_default)
         time_frame = ctk.CTkFrame(time_window)
         time_frame.pack(pady=20, padx=20)
         # Hour selection
@@ -301,6 +353,17 @@ class ReminderApp:
                 hour = 0
             self.selected_time = f"{hour:02d}:{minute_var.get()}"
             display_time = f"{hour_var.get()}:{minute_var.get()} {ampm_var.get()}"
+            # Validate not in the past
+            try:
+                selected_dt = datetime.strptime(f"{self.selected_date} {self.selected_time}", "%Y-%m-%d %H:%M")
+                if selected_dt <= datetime.now():
+                    try:
+                        messagebox.showwarning("Invalid Time", "Please select a future time.")
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
             self.time_label.configure(text=f"Time: {display_time}")
             self.time_picker_open = False
             time_window.destroy()
@@ -425,7 +488,7 @@ class ReminderApp:
                 pass
     
     def show_todo_notification(self, todo):
-        notification.notify(
+        self.safe_notify(
             title="Todo Reminder",
             message=f"Task due: {todo['task']}",
             timeout=10
@@ -441,7 +504,7 @@ class ReminderApp:
                 time.sleep(1)  # Sleep for 1 second at a time
                 
             if getattr(self, f"{reminder_type}_active"):  # Check if still active after sleep
-                notification.notify(
+                self.safe_notify(
                     title=message,
                     message="Take a break and stay healthy!",
                     timeout=10
@@ -457,7 +520,7 @@ class ReminderApp:
             # Trigger both reminders
             self.show_reminder_popup("Time to Hydrate! 💧\nTime to rest your eyes! 👀")
             try:
-                notification.notify(
+                self.safe_notify(
                     title="Health Reminder",
                     message="Time to Hydrate! 💧\nTime to rest your eyes! 👀",
                     timeout=10
@@ -475,6 +538,38 @@ class ReminderApp:
     
     def run(self):
         self.window.mainloop()
+
+    # -------- Windows integration helpers --------
+    def safe_notify(self, title: str, message: str, timeout: int = 10) -> None:
+        try:
+            icon_path = get_resource_path("icon.ico")
+            notification.notify(title=title, message=message, timeout=timeout, app_name="Health & Task Reminder", app_icon=icon_path if os.path.exists(icon_path) else None)
+        except Exception:
+            try:
+                messagebox.showinfo(title, message)
+            except Exception:
+                pass
+
+    def register_startup(self, enable: bool = True) -> None:
+        if _winreg is None:
+            return
+        try:
+            run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            with _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, run_key_path, 0, _winreg.KEY_ALL_ACCESS) as key:
+                app_name = "HealthTaskReminder"
+                if enable:
+                    if getattr(sys, 'frozen', False):
+                        exe_path = sys.executable
+                    else:
+                        exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+                    _winreg.SetValueEx(key, app_name, 0, _winreg.REG_SZ, exe_path)
+                else:
+                    try:
+                        _winreg.DeleteValue(key, app_name)
+                    except FileNotFoundError:
+                        pass
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     app = ReminderApp()
