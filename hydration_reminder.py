@@ -90,14 +90,7 @@ class ReminderApp:
         # Handle window close
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # Countdown Timer Label
         self.countdown_seconds = 20 * 60  # 20 minutes in seconds
-        self.timer_label = ctk.CTkLabel(
-            self.window,
-            text="Next reminder in: 20:00",
-            font=("Helvetica", 18, "bold")
-        )
-        self.timer_label.pack(pady=10)
         self.update_countdown_timer()
     
     def setup_tray(self):
@@ -126,6 +119,9 @@ class ReminderApp:
         threading.Thread(target=self.icon.run, daemon=True).start()
     
     def show_window(self):
+        self.window.after(0, self._show_window_safe)
+        
+    def _show_window_safe(self):
         self.window.deiconify()
         self.window.lift()
     
@@ -138,8 +134,8 @@ class ReminderApp:
         # Stop the icon
         self.icon.stop()
         
-        # Destroy the window
-        self.window.destroy()
+        # Destroy the window safely on main thread
+        self.window.after(0, self.window.destroy)
     
     def on_closing(self):
         # Hide the window instead of closing
@@ -170,82 +166,121 @@ class ReminderApp:
             pass
     
     def setup_ui(self):
+        # Configure grid layout for the main window
+        self.window.grid_columnconfigure(0, weight=1)
+        self.window.grid_rowconfigure(2, weight=1)  # Todo list expands
+
+        # --- Hero Section (Header & Timer) ---
+        self.hero_frame = ctk.CTkFrame(self.window, fg_color="transparent")
+        self.hero_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        
         # Title
         title_label = ctk.CTkLabel(
-            self.window,
-            text="Todo List with Health Reminders",
-            font=("Helvetica", 24, "bold")
+            self.hero_frame,
+            text="Hydration & Focus",
+            font=("Roboto Medium", 24),
+            text_color=("gray40", "gray80")
         )
-        title_label.pack(pady=20)
+        title_label.pack(anchor="center")
         
-        # Status Label
+        # Big Countdown Timer (Hero Element)
+        self.timer_label = ctk.CTkLabel(
+            self.hero_frame,
+            text="20:00",
+            font=("Roboto", 64, "bold"),
+            text_color=("#3B8ED0", "#1F6AA5")  # CustomTKinter blue accent
+        )
+        self.timer_label.pack(anchor="center", pady=(5, 10))
+
         self.status_label = ctk.CTkLabel(
-            self.window,
-            text="Health Reminders: Active (20 min intervals)",
-            font=("Helvetica", 14)
+            self.hero_frame,
+            text="Next wellness check",
+            font=("Roboto", 12),
+            text_color=("gray50", "gray70")
         )
-        self.status_label.pack(pady=10)
-        
-        # Add Todo Frame
-        add_frame = ctk.CTkFrame(self.window)
-        add_frame.pack(pady=10, padx=20, fill="x")
-        
-        # Task Entry
+        self.status_label.pack(anchor="center")
+
+        # --- Add Task Section ---
+        self.add_frame = ctk.CTkFrame(self.window, corner_radius=10)
+        self.add_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=10)
+        self.add_frame.grid_columnconfigure(0, weight=1) # Entry expands
+
+        # Row 1: Entry
         self.task_entry = ctk.CTkEntry(
-            add_frame,
-            placeholder_text="Enter task",
-            width=200
+            self.add_frame,
+            placeholder_text="What do you need to get done?",
+            height=40,
+            font=("Roboto", 14),
+            border_width=0,
+            fg_color=("gray90", "gray20")
         )
-        self.task_entry.pack(side="left", padx=5, pady=10)
+        self.task_entry.grid(row=0, column=0, columnspan=3, sticky="ew", padx=10, pady=(10, 5))
+
+        # Row 2: Controls & Actions
+        self.controls_frame = ctk.CTkFrame(self.add_frame, fg_color="transparent")
+        self.controls_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
         
-        # Date Button
+        # Date & Time Pickers
         self.date_button = ctk.CTkButton(
-            add_frame,
-            text="Select Date",
+            self.controls_frame,
+            text="📅 Date",
             command=self.show_date_picker,
-            width=100
+            width=80,
+            height=32,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("gray40", "gray80")
         )
-        self.date_button.pack(side="left", padx=5, pady=10)
-        
-        # Time Button
+        self.date_button.pack(side="left", padx=(0, 5))
+
         self.time_button = ctk.CTkButton(
-            add_frame,
-            text="Select Time",
+            self.controls_frame,
+            text="⏰ Time",
             command=self.show_time_picker,
-            width=100
+            width=80,
+            height=32,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("gray40", "gray80")
         )
-        self.time_button.pack(side="left", padx=5, pady=10)
+        self.time_button.pack(side="left", padx=5)
+
+        # Selected Info Display (Small text)
+        self.selection_info_label = ctk.CTkLabel(
+            self.controls_frame,
+            text="",
+            font=("Roboto", 11),
+            text_color="gray60"
+        )
+        self.selection_info_label.pack(side="left", padx=10)
         
-        # Add Button
+        # Add Button (Primary Action)
         add_button = ctk.CTkButton(
-            add_frame,
+            self.controls_frame,
             text="Add Task",
             command=self.add_todo,
-            width=100
+            width=100,
+            height=32,
+            font=("Roboto", 13, "bold")
         )
-        add_button.pack(side="left", padx=5, pady=10)
+        add_button.pack(side="right")
         
-        # Selected date/time labels in a new row
-        label_frame = ctk.CTkFrame(self.window)
-        label_frame.pack(pady=0, padx=20, fill="x")
+        # Keep references for logic to use (adapting old variables to new UI)
+        self.date_label = self.selection_info_label # Mapping old prop to new label for compat
+        self.time_label = self.selection_info_label # Reuse same label for simplicity or update method
+
+        # --- Todo List Section ---
+        self.todo_frame = ctk.CTkScrollableFrame(
+            self.window,
+            label_text="Your Tasks",
+            label_font=("Roboto Medium", 14),
+            corner_radius=10
+        )
+        self.todo_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(10, 20))
+        
+        # Initialize helper parsing variables
         self.selected_date = None
         self.selected_time = None
-        self.date_label = ctk.CTkLabel(
-            label_frame,
-            text="",
-            font=("Helvetica", 12)
-        )
-        self.date_label.pack(side="left", padx=5, pady=5)
-        self.time_label = ctk.CTkLabel(
-            label_frame,
-            text="",
-            font=("Helvetica", 12)
-        )
-        self.time_label.pack(side="left", padx=5, pady=5)
-        
-        # Todo List Frame
-        self.todo_frame = ctk.CTkScrollableFrame(self.window)
-        self.todo_frame.pack(pady=10, padx=20, fill="both", expand=True)
         
         # Refresh todo list
         self.refresh_todo_list()
@@ -272,15 +307,17 @@ class ReminderApp:
         # Add select button
         def select_date():
             self.selected_date = cal.get_date()
-            self.date_label.configure(text=f"Date: {self.selected_date}")
+            self.selected_date = cal.get_date()
+            self.selection_info_label.configure(text=f"📅 {self.selected_date}")
             self.date_picker_open = False
             date_window.destroy()
             # Open time picker immediately after selecting date
             self.show_time_picker()
         select_button = ctk.CTkButton(
             date_window,
-            text="Select",
-            command=select_date
+            text="Next ➔",
+            command=select_date,
+            font=("Roboto", 13, "bold")
         )
         select_button.pack(pady=10)
     def _on_close_date_picker(self, window):
@@ -356,7 +393,7 @@ class ReminderApp:
             elif ampm_var.get() == "AM" and hour == 12:
                 hour = 0
             self.selected_time = f"{hour:02d}:{minute_var.get()}"
-            display_time = f"{hour_var.get()}:{minute_var.get()} {ampm_var.get()}"
+            display_time = f"{hour:02d}:{minute_var.get()} {ampm_var.get()}"
             # Validate not in the past
             try:
                 selected_dt = datetime.strptime(f"{self.selected_date} {self.selected_time}", "%Y-%m-%d %H:%M")
@@ -368,13 +405,18 @@ class ReminderApp:
                     return
             except Exception:
                 pass
-            self.time_label.configure(text=f"Time: {display_time}")
+            
+            # Update the unified info label
+            current_text = f"📅 {self.selected_date}"
+            self.selection_info_label.configure(text=f"{current_text}  •  ⏰ {self.selected_time}")
+            
             self.time_picker_open = False
             time_window.destroy()
         select_button = ctk.CTkButton(
             time_window,
-            text="Select",
-            command=select_time
+            text="Confirm Time",
+            command=select_time,
+             font=("Roboto", 13, "bold")
         )
         select_button.pack(pady=10)
     def _on_close_time_picker(self, window):
@@ -407,8 +449,8 @@ class ReminderApp:
         self.task_entry.delete(0, tk.END)
         self.selected_date = None
         self.selected_time = None
-        self.date_label.configure(text="")
-        self.time_label.configure(text="")
+        # Reset specific label
+        self.selection_info_label.configure(text="")
         
         # Schedule notification if date and time are set
         if todo["date"] and todo["time"]:
@@ -421,55 +463,101 @@ class ReminderApp:
             
         # Add todos to frame
         for i, todo in enumerate(self.todos):
-            todo_frame = ctk.CTkFrame(self.todo_frame)
-            todo_frame.pack(fill="x", pady=5, padx=5)
-            
-            # Task label
-            task_text = todo["task"]
-            if todo["date"]:
-                task_text += f" (Due: {todo['date']}"
-                if todo["time"]:
-                    task_text += f" at {todo['time']}"
-                task_text += ")"
-                
-            task_label = ctk.CTkLabel(
-                todo_frame,
-                text=task_text,
-                font=("Helvetica", 12)
+            # Card Frame
+            todo_card = ctk.CTkFrame(
+                self.todo_frame,
+                fg_color=("gray95", "gray17"), # Slightly lighter/different than background
+                corner_radius=8
             )
-            task_label.pack(side="left", padx=5, pady=5)
+            todo_card.pack(fill="x", pady=4, padx=5)
             
-            # Daily toggle
+            # --- Left side: Task Info ---
+            info_frame = ctk.CTkFrame(todo_card, fg_color="transparent")
+            info_frame.pack(side="left", fill="both", expand=True, padx=10, pady=5)
+            
+            # Strikethrough effect logic could go here, but for now just dim color if completed
+            text_color = "gray50" if todo["completed"] else ("gray10", "gray90")
+            font_style = ("Roboto", 14)
+            
+            task_label = ctk.CTkLabel(
+                info_frame,
+                text=todo["task"],
+                font=font_style,
+                text_color=text_color,
+                anchor="w"
+            )
+            task_label.pack(fill="x")
+            
+            # Date/Time subtext
+            if todo["date"] or todo["time"]:
+                due_text = f"📅 {todo['date']}" if todo['date'] else ""
+                if todo['time']:
+                    due_text += f" • ⏰ {todo['time']}"
+                if todo.get("daily"):
+                    due_text += " • 🔄 Daily"
+                    
+                sub_label = ctk.CTkLabel(
+                    info_frame,
+                    text=due_text,
+                    font=("Roboto", 11),
+                    text_color="gray60",
+                    anchor="w"
+                )
+                sub_label.pack(fill="x")
+
+            # --- Right side: Actions ---
+            actions_frame = ctk.CTkFrame(todo_card, fg_color="transparent")
+            actions_frame.pack(side="right", padx=10)
+
+            # Daily toggle (Simplified to just an Icon/Checkbox or keep switch if preferred, sticking to switch for functionality)
+            # Using a smaller switch
             daily_var = tk.BooleanVar(value=todo.get("daily", False))
             def make_toggle_handler(index, var):
                 return lambda: self.toggle_daily(index, var.get())
-            daily_switch = ctk.CTkSwitch(
-                todo_frame,
-                text="Remind daily",
-                command=make_toggle_handler(i, daily_var),
-                variable=daily_var
-            )
-            daily_switch.pack(side="right", padx=5, pady=5)
-
-            # Complete button
-            if not todo["completed"]:
-                complete_button = ctk.CTkButton(
-                    todo_frame,
-                    text="Complete",
-                    command=lambda idx=i: self.complete_todo(idx),
-                    width=80
-                )
-                complete_button.pack(side="right", padx=5, pady=5)
             
-            # Delete button
-            delete_button = ctk.CTkButton(
-                todo_frame,
-                text="Delete",
-                command=lambda idx=i: self.delete_todo(idx),
-                width=80,
-                fg_color="red"
+            # Tooltip-ish text or just icon could be better, but switch is clear
+            daily_switch = ctk.CTkSwitch(
+                actions_frame,
+                text="Daily",
+                font=("Roboto", 11),
+                command=make_toggle_handler(i, daily_var),
+                variable=daily_var,
+                width=60,
+                height=20,
+                switch_width=30,
+                switch_height=16
             )
-            delete_button.pack(side="right", padx=5, pady=5)
+            daily_switch.pack(side="left", padx=5)
+
+            # Complete Action
+            if not todo["completed"]:
+                complete_btn = ctk.CTkButton(
+                    actions_frame,
+                    text="✔",
+                    width=30,
+                    height=30,
+                    corner_radius=15, # Circular
+                    fg_color="#2CC985",
+                    hover_color="#229C68",
+                    command=lambda idx=i: self.complete_todo(idx)
+                )
+                complete_btn.pack(side="left", padx=5)
+            
+            # Delete Action
+            delete_btn = ctk.CTkButton(
+                actions_frame,
+                text="✕",
+                width=30,
+                height=30,
+                corner_radius=15, # Circular
+                fg_color="transparent",
+                text_color="gray50",
+                hover_color=("gray80", "gray30"),
+                border_width=1,
+                border_color=("gray70", "gray40"),
+                command=lambda idx=i: self.delete_todo(idx)
+            )
+            delete_btn.pack(side="right", padx=5)
     
     def complete_todo(self, index):
         self.todos[index]["completed"] = True
@@ -579,16 +667,22 @@ class ReminderApp:
         return
     
     def update_countdown_timer(self):
-        mins, secs = divmod(self.countdown_seconds, 60)
-        self.timer_label.configure(text=f"Next reminder in: {mins:02d}:{secs:02d}")
         if self.countdown_seconds > 0:
             self.countdown_seconds -= 1
-            self.window.after(1000, self.update_countdown_timer)
         else:
-            # Trigger both reminders
+            # Trigger reminders
             self.show_unified_reminder_popup()
             self.countdown_seconds = 20 * 60
-            self.window.after(1000, self.update_countdown_timer)
+
+        # Only update GUI if window is visible (normal state) to save CPU
+        try:
+            if self.window.state() == "normal":
+                mins, secs = divmod(self.countdown_seconds, 60)
+                self.timer_label.configure(text=f"{mins:02d}:{secs:02d}")
+        except Exception:
+            pass
+            
+        self.window.after(1000, self.update_countdown_timer)
 
     def show_reminder_popup(self, message):
         # Deprecated in favor of show_unified_reminder_popup
